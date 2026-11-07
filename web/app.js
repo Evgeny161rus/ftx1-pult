@@ -65,6 +65,7 @@ const C = {                         // состояние клиента
   lockUntil: {},                    // ключ -> время, до которого не принимаем значение с сервера
   wfMax: store.get('wfMax', 0),          // выбранный обзор водопада, 0 = авто
   span: 4000, bw: 0,                      // действующий обзор и измеренная полоса звука трансивера
+  ftWfSec: store.get('ftWfSec', 20),      // история водопада FT8, секунд
 };
 const opts = Object.assign({ echo: false, ns: false, agc: false, muteTx: true, pttMode: 'hold', space: true, palette: 'classic', micGain: 100, micId: '',
   sqMode: 'radio', sqThr: -60, tail: 500, scale: 'auto', hotkeys: true, wfAuto: true }, store.get('opts', {}));
@@ -192,7 +193,7 @@ function applyState(d, full) {
   drawOverlay();
   if ('tuning' in d) $('#tuneState').textContent = S.tuning ? 'Идёт настройка…' : '';
   if ('tx' in d) document.body.classList.toggle('txon', !!S.tx);
-  if ('mode' in d) { C.autoLock = null; C.bwHist = []; updateSpan(true); renderSq(); pushGate(); renderCenterBtn(); }
+  if ('mode' in d) { C.autoLock = null; C.bw = 0; updateSpan(true); renderSq(); pushGate(); renderCenterBtn(); }
   if ('busy' in d || 'tx' in d) pushGate();
   if ('sql' in d) renderSq();
 }
@@ -576,7 +577,7 @@ function wfRow(row, binHz) {
   if (C.wfT) C.wfRate = (C.wfRate || 30) * 0.95 + 0.05 * (1000 / Math.max(1, tNow - C.wfT));
   C.wfT = tNow;
   if (C.tab === 'ft8' && !mirrored()) {
-    const N = Math.max(1, Math.round((C.wfRate || 30) * 50 / Math.max(50, wf.rows || 300)));
+    const N = Math.max(1, Math.round((C.wfRate || 30) * (C.ftWfSec || 20) / Math.max(50, wf.rows || 300)));
     if (!C.ftAcc || C.ftAcc.length !== row.length) { C.ftAcc = Uint8Array.from(row); C.ftAccN = 0; }
     else for (let i = 0; i < row.length; i++) if (row[i] > C.ftAcc[i]) C.ftAcc[i] = row[i];
     if (++C.ftAccN < N) return;
@@ -722,23 +723,28 @@ function tuneToAudio(a) {
 })();
 // Обзор водопада. «Авто» — по измеренной полосе звука трансивера (в FM она шире, чем в SSB),
 // пока не измерена — по виду работы.
-// Авто-обзор: по измеренной полосе звука, но без дёрганья — только стандартные шаги,
-// решение после 3 одинаковых замеров подряд, дальше обзор только расширяется, а сбрасывается
-// при смене вида работы.
+// Авто-обзор: по измеренной полосе звука, только стандартные шаги; расширяется сразу,
+// сужается при явном сужении полосы, сбрасывается при смене вида работы.
 const SPAN_STEPS = [3000, 4000, 6000, 8000, 12000, 24000];
 function autoSpan() {
   const m = S.mode || '';
   if (C.autoLock && C.autoLock.mode === m) return C.autoLock.span;
+  if (C.bw) return SPAN_STEPS.find(v => v >= C.bw * 1.05) || 24000;
   return /FM|C4FM/.test(m) ? 4000 : /^AM/.test(m) ? 4000 : isCW(m) ? 3000 : 4000;
 }
 function onBw(hz) {
   const m = S.mode || '';
+  C.bw = hz;
+  // Сервер уже сглаживает полосу и присылает только заметные изменения (>300 Гц),
+  // поэтому ждать «три одинаковых замера» не нужно — иначе авто-обзор в FM
+  // оставался 4 кГц и обрезал 8-килогерцовый звук.
   const cand = SPAN_STEPS.find(v => v >= hz * 1.05) || 24000;
   const L = C.autoLock && C.autoLock.mode === m ? C.autoLock : null;
-  C.bwHist = (C.bwHist || []).concat(cand).slice(-5);
-  const same = n => C.bwHist.length >= n && C.bwHist.slice(-n).every(v => v === C.bwHist[C.bwHist.length - 1]);
-  if (!L && same(3)) C.autoLock = { mode: m, span: cand };
-  else if (L && cand > L.span && same(5)) L.span = cand;
+  // Расширяемся сразу, сужаемся — только если полоса заметно (на 15%) уже текущего обзора,
+  // иначе случайный всплеск замера один раз растянет обзор до 24 кГц до смены вида работы.
+  if (!L) C.autoLock = { mode: m, span: cand };
+  else if (cand > L.span) L.span = cand;
+  else if (cand < L.span && hz * 1.15 < L.span) L.span = cand;
   updateSpan();
 }
 function updateSpan(force) {
@@ -746,6 +752,13 @@ function updateSpan(force) {
   $$('#spanSeg button').forEach(x => x.classList.toggle('on', +x.dataset.v === C.wfMax));
   const ab = $('#spanSeg button[data-v="0"]');
   ab.textContent = C.wfMax ? 'Авто' : `Авто ${(span / 1000).toFixed(span % 1000 ? 1 : 0)}k`;
+  const hint = $('#wfHint');
+  if (hint) {
+    const narrow = C.bw && C.bw > span * 1.05;
+    hint.textContent = narrow ? `Полоса ${(C.bw / 1000).toFixed(1)} кГц шире обзора — нажмите «Авто»`
+      : 'Двойной клик — настроиться на сигнал';
+    hint.style.color = narrow ? 'var(--warn)' : '';
+  }
   if (span === C.span && !force) return;
   C.span = span; wf.canvas.width = 0;
   send({ t: 'wf', on: true, max: span }); drawOverlay();
@@ -2215,6 +2228,8 @@ const ft8Desk = (() => {
   $('#ftOnlyCq').onchange = e => { store.set('ftOnlyCq', e.target.checked); applyFilter(); };
   $('#ftWfLab').checked = st.labOn;
   $('#ftWfLab').onchange = e => { st.labOn = e.target.checked; store.set('ftWfLab', st.labOn); marks(); };
+  $('#ftWfSec').value = C.ftWfSec;
+  $('#ftWfSec').onchange = e => { C.ftWfSec = +e.target.value; store.set('ftWfSec', C.ftWfSec); };
   const CFG = { ftCall: 'my_call', ftGrid: 'my_grid', ftPwr: 'ft_pwr', ftTries: 'ft_tries', ftLevel: 'ft_tx_level',
     ftUdpOn: 'ft_udp_on', ftUdpHost: 'ft_udp_host', ftUdpPort: 'ft_udp_port', ftWide: 'ft_wide' };
   for (const [id, k] of Object.entries(CFG)) {

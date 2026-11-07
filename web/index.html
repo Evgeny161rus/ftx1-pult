@@ -509,6 +509,8 @@
             <label class="mini" title="Уровень сигнала передачи (ALC должен почти не двигаться)">Уровень TX<input id="ftLevel" type="range" min="0.05" max="1" step="0.05" value="0.5"></label>
             <label class="chk mini"><input type="checkbox" id="ftWide" checked> расширять полосу DATA-U до 3000 Гц</label>
             <label class="chk mini"><input type="checkbox" id="ftWfLab" checked> позывные и время на водопаде</label>
+            <label class="mini" title="Сколько секунд истории показывать на водопаде FT8">Водопад<select id="ftWfSec">
+              <option value="20">быстро</option><option value="35">средне</option><option value="50">медленно</option></select></label>
             <label class="chk mini"><input type="checkbox" id="ftUdpOn" checked> отправлять в лог (UDP, как WSJT-X)</label>
             <label class="mini">Адрес<input id="ftUdpHost" class="text mono" value="127.0.0.1"></label>
             <label class="mini">Порт<input id="ftUdpPort" type="number" class="num" value="2237"></label>

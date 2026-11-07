@@ -107,9 +107,21 @@ class Waterfall:
             return
         thr = max(ref - 20, floor + 6)          # край полосы — где уровень упал на 20 дБ
         sm = np.convolve(np.pad(a, 4, mode='edge'), np.ones(9) / 9, mode='valid')
-        above = np.nonzero(sm[lo:] > thr)[0]
-        if len(above):
-            self.bandwidth = int((lo + above[-1]) * self.bin_hz)
+        # Край полосы — начало первой «тишины» шириной 400 Гц: одиночный всплеск шума
+        # на 12-18 кГц больше не растягивает измеренную полосу до 24 кГц.
+        seg = sm[lo:]
+        quiet = seg <= thr
+        gap = max(1, int(400 / self.bin_hz))
+        run, edge = 0, len(seg)
+        for i in range(len(seg)):
+            if quiet[i]:
+                run += 1
+                if run >= gap:
+                    edge = i - gap + 1
+                    break
+            else:
+                run = 0
+        self.bandwidth = int((lo + edge) * self.bin_hz)
 
     def process(self, x):
         """Возвращает список строк (np.uint8, N/2 бинов)."""
