@@ -47,6 +47,7 @@ from recorder import QsoRecorder  # noqa: E402
 from ft8 import Ft8Desk  # noqa: E402
 
 VERSION = "2.1"
+WF_MAX_BINS = 2000        # больше колонок, чем помещается на экран, не нужно
 APP_NAME = "FTX-1 Пульт"
 log = logging.getLogger("main")
 IS_WIN = sys.platform == 'win32'
@@ -435,8 +436,20 @@ class Station:
             for row in rows:
                 for c in self.clients:
                     if c.wf and c.authed:
-                        n = min(len(row), int(c.wf_max / self.wf.bin_hz) + 1)
-                        c.ws.send_bin(b'\x02' + struct.pack('<Hf', n, self.wf.bin_hz) + row[:n].tobytes())
+                        # Высокое разрешение БПФ нужно не всё: на экран телефона/ПК
+                        # больше ~2000 колонок не помещается. Сужаем строку по максимуму
+                        # (пик держит узкие несущие, усреднение их бы размазало).
+                        bins = min(len(row), int(c.wf_max / self.wf.bin_hz) + 1)
+                        step = max(1, (bins + WF_MAX_BINS - 1) // WF_MAX_BINS)
+                        seg = row[:bins]
+                        if step > 1:
+                            m = len(seg) // step * step
+                            parts = [seg[:m].reshape(-1, step).max(axis=1)]
+                            if m < len(seg):
+                                parts.append(seg[m:].max(keepdims=True))
+                            seg = np.concatenate(parts)
+                        c.ws.send_bin(b'\x02' + struct.pack('<Hf', len(seg), self.wf.bin_hz * step)
+                                      + seg.tobytes())
         self.cw.feed(x)
         self.digi.feed(x)
         self.ft.feed(x)

@@ -67,7 +67,7 @@ const C = {                         // состояние клиента
   span: 4000, bw: 0,                      // действующий обзор и измеренная полоса звука трансивера
 };
 const opts = Object.assign({ echo: false, ns: false, agc: false, muteTx: true, pttMode: 'hold', space: true, palette: 'classic', micGain: 100, micId: '',
-  sqMode: 'radio', sqThr: -60, tail: 500, scale: 'auto', hotkeys: true }, store.get('opts', {}));
+  sqMode: 'radio', sqThr: -60, tail: 500, scale: 'auto', hotkeys: true, wfAuto: true }, store.get('opts', {}));
 if ((opts.v | 0) < 2) {           // 1.8: обработка браузера для эфира по умолчанию выключена (портила голос)
   opts.echo = false; opts.ns = false; opts.agc = false; opts.v = 2; store.set('opts', opts);
 }
@@ -499,15 +499,20 @@ $('#btnLock').onclick = () => setParam('lock', S.lock ? 0 : 1);
 $('#btnMemCh').onclick = () => act('mem_ch', +$('#memCh').value);
 
 // ------------------------------------------------------------------ водопад
-const wf = { canvas: $('#wf'), spec: $('#spec'), ov: $('#overlay'), lut: null, avg: null, binHz: 11.71875, n: 0, rows: 0 };
+const wf = { canvas: $('#wf'), spec: $('#spec'), ov: $('#overlay'), lut: null, avg: null, binHz: 11.71875, n: 0, rows: 0,
+  autoFloor: null, autoRange: null, hist: null };
 const PALETTES = {
   classic: [[0, 0, 0, 0], [0.15, 0, 0, 90], [0.35, 0, 110, 200], [0.55, 0, 220, 200], [0.72, 240, 230, 0], [0.88, 255, 80, 0], [1, 255, 255, 255]],
   yaesu: [[0, 0, 4, 20], [0.3, 0, 40, 120], [0.6, 30, 140, 255], [0.85, 160, 230, 255], [1, 255, 255, 255]],
   gray: [[0, 0, 0, 0], [1, 255, 255, 255]],
   fire: [[0, 0, 0, 0], [0.3, 90, 0, 0], [0.6, 230, 80, 0], [0.85, 255, 210, 40], [1, 255, 255, 230]],
 };
+function levels() {
+  if (opts.wfAuto !== false) return [wf.autoFloor ?? -95, wf.autoRange ?? 80];
+  return [-130 + +$('#wfFloor').value * 0.5, +$('#wfRange').value];
+}
 function buildLut() {
-  const floor = -130 + +$('#wfFloor').value * 0.5, range = +$('#wfRange').value;
+  const [floor, range] = levels();
   const pal = PALETTES[opts.palette] || PALETTES.classic;
   wf.lut = new Uint32Array(256);
   for (let v = 0; v < 256; v++) {
@@ -518,10 +523,42 @@ function buildLut() {
     const r = r0 + (r1 - r0) * t, g = g0 + (g1 - g0) * t, b = b0 + (b1 - b0) * t;
     wf.lut[v] = (255 << 24) | (b << 16) | (g << 8) | r;   // little-endian RGBA
   }
-  store.set('wfFloor', +$('#wfFloor').value); store.set('wfRange', +$('#wfRange').value);
+}
+// Автоуровни: медиана строки — шум, 99-й процентиль — сигналы. Ниже 300 Гц не смотрим:
+// там обычно срез фильтра трансивера, и он зря занижал бы порог. Гистограмма вместо
+// сортировки (строка приходит 25 раз в секунду), сглаживание — чтобы картинка не мигала.
+function autoLevels(row) {
+  const h = wf.hist || (wf.hist = new Uint32Array(256));
+  h.fill(0);
+  const i0 = Math.max(0, Math.min(row.length - 1, Math.round(300 / (wf.binHz || 3))));
+  let total = 0;
+  for (let i = i0; i < row.length; i += 2) { h[row[i]]++; total++; }
+  if (!total) return;
+  let acc = 0, p50 = 0, p99 = 0;
+  for (let v = 0; v < 256; v++) {
+    acc += h[v];
+    if (!p50 && acc >= total * 0.50) p50 = v;
+    if (acc >= total * 0.99) { p99 = v; break; }
+  }
+  const f = p50 / 2 - 130 - 6;
+  const r = Math.max(24, Math.min(90, (p99 - p50) / 2 + 16));
+  if (wf.autoFloor == null) { wf.autoFloor = f; wf.autoRange = r; }
+  else { wf.autoFloor += (f - wf.autoFloor) * 0.05; wf.autoRange += (r - wf.autoRange) * 0.05; }
 }
 $('#wfFloor').value = store.get('wfFloor', 70); $('#wfRange').value = store.get('wfRange', 80);
-$('#wfFloor').oninput = buildLut; $('#wfRange').oninput = buildLut;
+$('#wfFloor').oninput = () => { buildLut(); store.set('wfFloor', +$('#wfFloor').value); };
+$('#wfRange').oninput = () => { buildLut(); store.set('wfRange', +$('#wfRange').value); };
+$('#wfAuto').checked = opts.wfAuto !== false;
+function wfAutoUi() {
+  const on = opts.wfAuto !== false;
+  $('#wfFloor').disabled = on; $('#wfRange').disabled = on;
+  $('#wfFloor').title = $('#wfRange').title = on ? 'Авто включено — ползунки не действуют' : '';
+}
+wfAutoUi();
+$('#wfAuto').onchange = e => {
+  opts.wfAuto = e.target.checked; saveOpts();
+  wf.autoFloor = wf.autoRange = null; wfAutoUi(); buildLut(); drawSpectrum();
+};
 
 function sizeCanvases() {
   if (typeof dial !== 'undefined') dial.resize();
@@ -545,14 +582,15 @@ function wfRow(row, binHz) {
     if (++C.ftAccN < N) return;
     row = C.ftAcc; C.ftAcc = null;
   }
+  wf.binHz = binHz;
+  if (opts.wfAuto !== false) { autoLevels(row); buildLut(); }
+  else if (!wf.lut) buildLut();
   if (mirrored()) {
     const n0 = row.length, r2 = new Uint8Array(n0 * 2 - 1);
     for (let i = 0; i < n0; i++) { r2[n0 - 1 - i] = row[i]; r2[n0 - 1 + i] = row[i]; }
     row = r2;
   }
-  if (!wf.lut) buildLut();
   const n = row.length;
-  wf.binHz = binHz;
   const cv = wf.canvas, ctx = cv.getContext('2d');
   if (cv.width !== n || cv.height !== wf.rows) {
     // при смене размера сохраняем накопленную картинку
@@ -575,7 +613,7 @@ function drawSpectrum() {
   const c = wf.spec, ctx = c.getContext('2d'), W = c.width, H = c.height, a = wf.avg;
   ctx.clearRect(0, 0, W, H);
   if (!a) return;
-  const floor = -130 + +$('#wfFloor').value * 0.5, range = +$('#wfRange').value;
+  const [floor, range] = levels();
   const span = C.span;
   ctx.beginPath();
   for (let x = 0; x < W; x++) {

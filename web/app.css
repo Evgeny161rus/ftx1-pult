@@ -140,7 +140,7 @@ body.txon .meter#mS, body.txon .meter.scale-row { display: none; }
 .wf-wrap { position: relative; height: clamp(220px, 42vh, 560px); background: #000; border-radius: 6px; overflow: hidden; touch-action: none; cursor: crosshair; }
 .wf-wrap canvas { position: absolute; left: 0; width: 100%; display: block; }
 #spec { top: 0; height: 28%; }
-#wf { top: 28%; height: 72%; image-rendering: pixelated; }
+#wf { top: 28%; height: 72%; image-rendering: auto; }
 #overlay { top: 0; height: 100%; pointer-events: none; }
 .wf-msg { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; padding: 20px;
   color: #ffb4b4; font-size: 14px; background: rgba(0,0,0,.55); pointer-events: none; }
