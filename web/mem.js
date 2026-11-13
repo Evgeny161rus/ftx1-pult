@@ -45,7 +45,7 @@ const memEd = (() => {
       <td>${grpSel}</td>
       <td><input data-f="name" class="nm" maxlength="12" value="${esc(c.name)}" placeholder="${e ? '' : '—'}"></td>
       <td><input data-f="freq" class="fq" inputmode="decimal" value="${e ? '' : fmtMHz(c.freq)}" placeholder="пусто"></td>
-      <td><select data-f="mode">${opts(modes, c.mode)}</select></td>
+      <td><select data-f="mode">${opts(modes.includes(c.mode) || e ? modes : [c.mode, ...modes], c.mode)}</select></td>
       <td><select data-f="shift"${e ? ' disabled' : ''}>${opts(fm ? [0, 1, 2, 3] : [0, 3], c.split ? 3 : c.shift, v => ['симпл.', '+', '−', 'отд. TX'][v])}</select></td>
       <td><input data-f="offset_khz" class="of" type="number" min="0" step="5" value="${c.shift && !c.split ? c.offset_khz : ''}"${fm && c.shift && !c.split ? '' : ' disabled'}></td>
       <td class="txf">${c.split ? `<input data-f="tx_freq" class="fq tx" inputmode="decimal" value="${fmtMHz(c.tx_freq)}">` : !e && c.shift ? fmtMHz(txFreq(c)) : ''}</td>
@@ -319,6 +319,37 @@ const memEd = (() => {
     const f = e.target.files[0]; e.target.value = ''; if (!f) return;
     if (!confirm('Каналы из CSV заменят каналы с теми же номерами в таблице. Продолжить?')) return;
     send({ t: 'mem_csv_in', text: await f.text() });
+  };
+  // ------------------------------------------------------------------ файлы флешки (MemList/*.dat)
+  $('#meSdIn').onchange = async e => {
+    const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+    let p;
+    try { p = sdFile.parse(await f.arrayBuffer()); } catch (err) { return toast(err.message, 6000); }
+    if (p.kind !== 'MemList') return toast(`Это файл «${p.kind}» (настройки меню) — пока открываются только файлы каналов из папки MemList`, 7000);
+    if (!p.crcOk && !confirm('Контрольная сумма файла не сходится — файл мог быть повреждён. Всё равно открыть?')) return;
+    if (allCh().some(isDirty) && !confirm(`Открыть «${f.name}»? Таблица заменится каналами из файла (в трансивер ничего не пишется).`)) return;
+    st.sd = p; st.sdName = f.name;
+    for (const c of p.chans) {
+      const old = st.chans[c.ch] || blank(c.ch);
+      st.chans[c.ch] = c.empty ? { ...blank(c.ch), group: old.group, comment: old.comment }
+        : { ...blank(c.ch), ...c, group: old.group, comment: old.comment, offset_khz: c.shift ? (old.offset_khz || defOffset(c.freq)) : 0 };
+    }
+    st.file = '';
+    const n = p.chans.filter(c => !c.empty).length;
+    setStatus(`Открыт файл с SD «${f.name}»: ${n} каналов`); toast(`Файл с SD: ${n} каналов`, 3000); render();
+  };
+  $('#meSdOut').onclick = () => {
+    if (!st.sd) return toast('Сначала откройте бэкап с флешки (💾 Открыть с SD) — новый файл собирается на его основе', 6000);
+    let r;
+    try { r = sdFile.build(st.sd, allCh().map(ch => st.chans[ch])); } catch (err) { return toast(err.message, 6000); }
+    if (r.errors.length && !confirm(`Эти каналы не попадут в файл (останутся как в исходном):\n${r.errors.slice(0, 15).join('\n')}${r.errors.length > 15 ? '\n…' : ''}\n\nСохранить остальное?`)) return;
+    if (!r.changed.length && !confirm('Изменений относительно открытого файла нет. Всё равно сохранить копию?')) return;
+    const name = sdFile.fileName(50);
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([r.bytes], { type: 'application/octet-stream' }));
+    a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    setStatus(`Сохранён ${name}: изменено каналов ${r.changed.length}. Положите в FTX-1\\MemList на флешке и загрузите в трансивере.`);
+    toast(`${name}: изменено ${r.changed.length} каналов → в папку FTX-1\\MemList`, 7000);
   };
   return { on, open };
 })();

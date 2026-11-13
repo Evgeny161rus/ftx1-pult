@@ -659,6 +659,10 @@
       <label class="btn" title="CSV: свой формат или из CHIRP">Импорт CSV<input type="file" id="meCsvIn" accept=".csv,.txt" hidden></label>
       <button class="btn" id="meCsvOut">Экспорт CSV</button>
     </div>
+    <div class="me-grp" title="Бэкап каналов с флешки трансивера: папка FTX-1\\MemList">
+      <label class="btn">💾 Открыть с SD<input type="file" id="meSdIn" accept=".dat" hidden></label>
+      <button class="btn" id="meSdOut" title="Сохранить .dat для загрузки в трансивер с флешки">💾 Сохранить для SD</button>
+    </div>
   </div>
   <div class="me-prog hidden" id="meProg"><i></i><span></span></div>
   <div class="me-body">
@@ -703,6 +707,7 @@
   </div>
 </div>
 <script src="app.js"></script>
+<script src="sdfile.js"></script>
 <script src="mem.js"></script>
 </body>
 </html>
