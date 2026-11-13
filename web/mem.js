@@ -12,7 +12,6 @@ const memEd = (() => {
   const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const blank = ch => ({ ch, empty: true, freq: 0, mode: 'FM', name: '', clar: 0, rx_clar: false, tx_clar: false, tone_mode: 0,
     ctcss: 88.5, dcs: 23, shift: 0, offset_khz: 0, split: false, tx_freq: 0, group: '', comment: '' });
-  const defOffset = f => { const m = f / 1e6; return m >= 28 && m < 30 ? 100 : m >= 50 && m < 54 ? 600 : m >= 144 && m < 148 ? 600 : m >= 430 && m < 440 ? 7600 : 0; };
   const fmtMHz = f => f ? (f / 1e6).toFixed(6).replace(/0{1,3}$/, '') : '';
   const allCh = () => { const a = []; for (let i = CH_MIN; i <= CH_MAX; i++) a.push(i); return a; };
   const label = ch => String(ch).padStart(3, '0');
@@ -47,8 +46,8 @@ const memEd = (() => {
       <td><input data-f="freq" class="fq" inputmode="decimal" value="${e ? '' : fmtMHz(c.freq)}" placeholder="пусто"></td>
       <td><select data-f="mode">${opts(modes.includes(c.mode) || e ? modes : [c.mode, ...modes], c.mode)}</select></td>
       <td><select data-f="shift"${e ? ' disabled' : ''}>${opts(fm ? [0, 1, 2, 3] : [0, 3], c.split ? 3 : c.shift, v => ['симпл.', '+', '−', 'отд. TX'][v])}</select></td>
-      <td><input data-f="offset_khz" class="of" type="number" min="0" step="5" value="${c.shift && !c.split ? c.offset_khz : ''}"${fm && c.shift && !c.split ? '' : ' disabled'}></td>
-      <td class="txf">${c.split ? `<input data-f="tx_freq" class="fq tx" inputmode="decimal" value="${fmtMHz(c.tx_freq)}">` : !e && c.shift ? fmtMHz(txFreq(c)) : ''}</td>
+      <td><input data-f="offset_khz" class="of" type="number" min="0" step="5" value="" placeholder="${fm && c.shift && !c.split ? 'меню' : ''}" title="Разнос, кГц. FTX-1 не хранит разнос в канале: введённый разнос запишется как отдельная частота передачи"${fm && c.shift && !c.split ? '' : ' disabled'}></td>
+      <td class="txf">${c.split ? `<input data-f="tx_freq" class="fq tx" inputmode="decimal" value="${fmtMHz(c.tx_freq)}">` : !e && c.shift ? `<span class="muted" title="Разнос берётся из меню трансивера (FM → RPT SHIFT) для этого диапазона">${c.shift === 1 ? '+' : '−'} разнос из меню</span>` : ''}</td>
       <td><select data-f="tone_mode"${fm ? '' : ' disabled'}>${opts([0, 1, 2, 3], c.tone_mode, v => ['выкл', 'ENC', 'TSQ', 'DCS'][v])}</select></td>
       <td><select data-f="ctcss"${fm && (c.tone_mode === 1 || c.tone_mode === 2) ? '' : ' disabled'}>${opts(ctcss, c.ctcss, v => (+v).toFixed(1))}</select></td>
       <td><select data-f="dcs"${fm && c.tone_mode === 3 ? '' : ' disabled'}>${opts(dcs, c.dcs, v => String(v).padStart(3, '0'))}</select></td>
@@ -113,7 +112,6 @@ const memEd = (() => {
         if (hz < 30e3 || hz > 470e6) { toast('Частота вне диапазона FTX-1 (0,03–470 МГц)'); renderRow(ch); return; }
         const wasEmpty = c.empty; c.freq = hz; c.empty = false;
         if (wasEmpty) c.mode = hz >= 144e6 || (hz >= 29.5e6 && hz < 29.7e6) ? 'FM' : hz < 10e6 ? 'LSB' : 'USB';
-        if (!c.offset_khz) c.offset_khz = defOffset(hz);
       }
     } else if (f === 'shift') {
       const n = parseInt(v, 10) || 0;
@@ -124,11 +122,16 @@ const memEd = (() => {
       const hz = Math.round(mhz * 1e6);
       if (!(hz >= 30e3 && hz <= 470e6)) { toast('Частота передачи вне диапазона'); renderRow(ch); return; }
       c.tx_freq = hz;
-    } else if (['tone_mode', 'dcs', 'clar', 'offset_khz'].includes(f)) c[f] = parseInt(v, 10) || 0;
+    } else if (f === 'offset_khz') {
+      const khz = parseFloat(String(v).replace(',', '.')) || 0;
+      if (khz > 0 && c.shift) {                          // разнос в канале FTX-1 не хранится — пишем как отдельную TX
+        c.tx_freq = c.freq + (c.shift === 1 ? 1 : -1) * Math.round(khz * 1000); c.split = true; c.shift = 0; c.offset_khz = 0;
+        toast(`FTX-1 хранит в канале только направление сдвига, а разнос — общий из меню. Записано как отдельная TX ${fmtMHz(c.tx_freq)}`, 7000);
+      }
+    } else if (['tone_mode', 'dcs', 'clar'].includes(f)) c[f] = parseInt(v, 10) || 0;
     else if (f === 'ctcss') c[f] = parseFloat(v);
     else if (f === 'name') c[f] = String(v).replace(/[^\x20-\x7e]|;/g, '').slice(0, 12);
     else c[f] = v;
-    if (f === 'shift' && c.shift && !c.offset_khz) c.offset_khz = defOffset(c.freq);
     if (f === 'mode' && !FM.includes(c.mode)) { c.shift = 0; c.tone_mode = 0; }
     if (c.empty && f !== 'group' && f !== 'comment' && f !== 'freq') { toast('Сначала укажите частоту'); }
     delete st.status[ch];
@@ -201,7 +204,7 @@ const memEd = (() => {
         for (const c of m.chans) {
           const old = st.chans[c.ch];
           if (m.imported || m.file) st.chans[c.ch] = { ...c };
-          else { st.chans[c.ch] = { ...c, group: old?.group || '', comment: old?.comment || '', offset_khz: old?.offset_khz && c.shift ? old.offset_khz : c.offset_khz }; st.rig[c.ch] = { ...c }; delete st.status[c.ch]; }
+          else { st.chans[c.ch] = { ...c, group: old?.group || '', comment: old?.comment || '', offset_khz: 0 }; st.rig[c.ch] = { ...c }; delete st.status[c.ch]; }
         }
         if (m.file) { st.file = m.file; if (m.groups) st.groups = m.groups; }
         if (m.imported) for (const c of m.chans) if (c.group && !st.groups.includes(c.group)) st.groups.push(c.group);
@@ -225,7 +228,6 @@ const memEd = (() => {
         if (!ch) return toast('Нет свободного канала');
         const c = st.chans[ch];
         Object.assign(c, { empty: false, freq: m.freq, mode: m.mode || c.mode });
-        if (!c.offset_khz) c.offset_khz = defOffset(c.freq);
         render(); toast(`Канал ${ch}: ${fmtMHz(m.freq)} ${m.mode}`); break;
       }
     }
@@ -332,7 +334,7 @@ const memEd = (() => {
     for (const c of p.chans) {
       const old = st.chans[c.ch] || blank(c.ch);
       st.chans[c.ch] = c.empty ? { ...blank(c.ch), group: old.group, comment: old.comment }
-        : { ...blank(c.ch), ...c, group: old.group, comment: old.comment, offset_khz: c.shift ? (old.offset_khz || defOffset(c.freq)) : 0 };
+        : { ...blank(c.ch), ...c, group: old.group, comment: old.comment, offset_khz: 0 };
     }
     st.file = '';
     const n = p.chans.filter(c => !c.empty).length;

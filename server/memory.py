@@ -151,7 +151,7 @@ class MemoryDesk:
         c = dict(blank(ch), **c)
         if mt and mt.startswith('MT%05d' % ch):
             c['name'] = mt[7:19].rstrip()
-        c['offset_khz'] = default_offset_khz(c['freq']) if c['shift'] else 0
+        c['offset_khz'] = 0          # разнос в канале не хранится — общий из меню трансивера
         c['split'], c['tx_freq'] = c_split, c_tx if c_split else 0
         return c
 
@@ -349,10 +349,9 @@ class MemoryDesk:
         for c in chans:
             if c.get('empty'):
                 continue
-            tx = c['tx_freq'] if c.get('split') else \
-                c['freq'] + (c['offset_khz'] * 1000 if c['shift'] == 1 else -c['offset_khz'] * 1000 if c['shift'] == 2 else 0)
+            tx = c['tx_freq'] if c.get('split') else c['freq'] if not c['shift'] else 0   # ± — разнос из меню трансивера
             w.writerow([c['ch'], c['group'], c['name'], '%.6f' % (c['freq'] / 1e6), c['mode'],
-                        'Split' if c.get('split') else ['Simplex', '+', '-'][c['shift']], c['offset_khz'], '%.6f' % (tx / 1e6),
+                        'Split' if c.get('split') else ['Simplex', '+', '-'][c['shift']], c['offset_khz'] or '', '%.6f' % (tx / 1e6) if tx else '',
                         ['Off', 'Tone', 'TSQL', 'DCS'][c['tone_mode']], c['ctcss'], '%03d' % c['dcs'], c['clar'],
                         int(c['rx_clar']), int(c['tx_clar']), c['comment']])
         return f.getvalue()
@@ -389,7 +388,13 @@ class MemoryDesk:
                          'dcs': int(r.get('dtcscode') or 23), 'comment': r.get('comment', '')}
                 else:
                     continue
-                out.append(clean(c))
+                c = clean(c)
+                # FTX-1 хранит в канале только направление сдвига, а разнос — общий из меню: если в CSV
+                # задан конкретный разнос, пишем канал с отдельной частотой передачи — так TX будет точной
+                if c['shift'] and c['offset_khz'] and not c['split']:
+                    c['tx_freq'] = c['freq'] + (1 if c['shift'] == 1 else -1) * c['offset_khz'] * 1000
+                    c['split'], c['shift'], c['offset_khz'] = True, 0, 0
+                out.append(c)
             except (ValueError, KeyError):
                 continue
         return out
